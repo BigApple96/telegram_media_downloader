@@ -68,5 +68,10 @@ log/
 temp/
 config.yaml
 data.yaml
+bot.yaml
+state/
+settings/
+config.yaml.*
+d
 *.scss
 *.css.map
