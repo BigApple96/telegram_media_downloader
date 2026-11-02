@@ -16,6 +16,7 @@ from ruamel import yaml
 from module.cloud_drive import CloudDrive, CloudDriveConfig
 from module.filter import Filter
 from module.language import Language, set_language
+from module.video_monitor import MonitorConfig
 from utils.format import replace_date_time, validate_title
 from utils.meta_data import MetaData
 
@@ -174,6 +175,8 @@ class TaskNode:
         self.upload_stat_dict: dict = {}
         self.topic_id = topic_id
         self.reply_to_message = None
+        self.monitor_download = False
+        self.completion_future: Optional[asyncio.Future] = None
         self.cloud_drive_upload_stat_dict: dict = {}
 
     def skip_msg_id(self, msg_id: int):
@@ -372,6 +375,7 @@ class Application:
         self.total_download_task = 0
 
         self.chat_download_config: dict = {}
+        self.monitor_config = MonitorConfig()
 
         self.save_path = os.path.join(os.path.abspath("."), "downloads")
         self.temp_save_path = os.path.join(os.path.abspath("."), "temp")

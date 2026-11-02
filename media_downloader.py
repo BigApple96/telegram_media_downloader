@@ -1,8 +1,10 @@
 """Downloads media from telegram."""
+import argparse
 import asyncio
 import logging
 import os
 import shutil
+import signal
 import time
 from typing import List, Optional, Tuple, Union
 
@@ -27,6 +29,7 @@ from module.pyrogram_extension import (
     update_cloud_upload_stat,
     upload_telegram_chat,
 )
+from module.video_monitor import MonitorConfig, MonitorState, VideoMonitor
 from module.web import init_web
 from utils.format import truncate_filename, validate_title
 from utils.log import LogFilter
@@ -300,14 +303,19 @@ async def download_task(
 ):
     """Download and Forward media"""
 
+    media_types = app.media_types
+    file_formats = app.file_formats
+    if node.monitor_download:
+        media_types = ["video", "document"]
+        file_formats = {"video": ["all"], "document": ["all"], **file_formats}
     download_status, file_name = await download_media(
-        client, message, app.media_types, app.file_formats, node
+        client, message, media_types, file_formats, node
     )
 
     if app.enable_download_txt and message.text and not message.media:
         download_status, file_name = await save_msg_to_file(app, node.chat_id, message)
 
-    if not node.bot:
+    if not node.bot and not node.monitor_download:
         app.set_download_id(node, message.id, download_status)
 
     node.download_status[message.id] = download_status
@@ -343,6 +351,7 @@ async def download_task(
         download_status,
         file_size,
     )
+    return download_status
 
 
 # pylint: disable = R0915,R0914
@@ -404,6 +413,21 @@ async def download_media(
             file_name, temp_file_name, file_format = await _get_media_meta(
                 node.chat_id, message, _media, _type
             )
+            if node.monitor_download:
+                # Channel IDs prevent identical names/IDs in different chats
+                # from being mistaken for the same completed download.
+                file_name = os.path.join(
+                    app.save_path,
+                    "monitor",
+                    str(node.chat_id),
+                    os.path.relpath(file_name, app.save_path),
+                )
+                temp_file_name = os.path.join(
+                    app.temp_save_path,
+                    "monitor",
+                    str(node.chat_id),
+                    os.path.relpath(temp_file_name, app.temp_save_path),
+                )
             media_size = getattr(_media, "file_size", 0)
 
             ui_file_name = file_name
@@ -413,7 +437,7 @@ async def download_media(
             if _can_download(_type, file_formats, file_format):
                 if _is_exist(file_name):
                     file_size = os.path.getsize(file_name)
-                    if file_size or file_size == media_size:
+                    if file_size == media_size:
                         logger.info(
                             f"id={message.id} {ui_file_name} "
                             f"{_t('already download,download skipped')}.\n"
@@ -499,6 +523,7 @@ async def download_media(
 def _load_config():
     """Load config"""
     app.load_config()
+    app.monitor_config = MonitorConfig.from_config(app.config)
 
 
 def _check_config() -> bool:
@@ -522,20 +547,57 @@ def _check_config() -> bool:
 async def worker(client: pyrogram.client.Client):
     """Work for download task"""
     while app.is_running:
+        node: Optional[TaskNode] = None
         try:
             item = await queue.get()
             message = item[0]
-            node: TaskNode = item[1]
+            node = item[1]
 
             if node.is_stop_transmission:
+                if node.completion_future and not node.completion_future.done():
+                    node.completion_future.set_result(False)
                 continue
 
             if node.client:
-                await download_task(node.client, message, node)
+                status = await download_task(node.client, message, node)
             else:
-                await download_task(client, message, node)
+                status = await download_task(client, message, node)
+            if node.completion_future and not node.completion_future.done():
+                node.completion_future.set_result(
+                    status
+                    in (DownloadStatus.SuccessDownload, DownloadStatus.SkipDownload)
+                )
+        except asyncio.CancelledError:
+            if node and node.completion_future and not node.completion_future.done():
+                node.completion_future.cancel()
+            raise
         except Exception as e:
+            if node and node.completion_future and not node.completion_future.done():
+                node.completion_future.set_exception(e)
             logger.exception(f"{e}")
+
+
+def monitor_history(client, chat_id, after_id, limit):
+    """Same ascending history polling as listen_forward, without old-history fallback."""
+    return get_chat_history_v2(
+        client,
+        chat_id,
+        offset_id=after_id + 1,
+        reverse=True,
+        limit=limit,
+        allow_fallback=False,
+    )
+
+
+async def download_monitored_video(chat_id, message):
+    """Wait for the existing worker to finish before committing monitor progress."""
+    node = TaskNode(chat_id=chat_id)
+    node.monitor_download = True
+    node.is_running = True
+    node.completion_future = asyncio.get_running_loop().create_future()
+    if not await add_download_task(message, node):
+        return False
+    return await node.completion_future
 
 
 async def download_chat_task(
@@ -620,7 +682,9 @@ async def run_until_all_task_finish():
             if not value.need_check or value.total_task != value.finish_task:
                 finish = False
 
-        if (not app.bot_token and finish) or app.restart_program:
+        if (
+            not app.bot_token and not app.monitor_config.enabled and finish
+        ) or app.restart_program:
             break
 
         await asyncio.sleep(1)
@@ -649,6 +713,12 @@ async def stop_server(client: pyrogram.Client):
 def main():
     """Main function of the downloader."""
     tasks = []
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+
+    def request_stop(_signum, _frame):
+        app.restart_program = True
+
+    signal.signal(signal.SIGTERM, request_stop)
     client = HookClient(
         "media_downloader",
         api_id=app.api_id,
@@ -667,7 +737,22 @@ def main():
         app.loop.run_until_complete(start_server(client))
         logger.success(_t("Successfully started (Press Ctrl+C to stop)"))
 
-        app.loop.create_task(download_all_chat(client))
+        if app.monitor_config.enabled:
+            monitor = VideoMonitor(
+                app.monitor_config,
+                client,
+                lambda chat_id, after_id, limit: monitor_history(
+                    client, chat_id, after_id, limit
+                ),
+                download_monitored_video,
+                MonitorState(app.config_file, app.config),
+            )
+            tasks.append(app.loop.create_task(monitor.run()))
+            logger.info(
+                "Automatic video monitoring enabled; config.yaml chat scan disabled"
+            )
+        else:
+            tasks.append(app.loop.create_task(download_all_chat(client)))
         for _ in range(app.max_download_task):
             task = app.loop.create_task(worker(client))
             tasks.append(task)
@@ -683,15 +768,18 @@ def main():
         logger.exception("{}", e)
     finally:
         app.is_running = False
+        for task in tasks:
+            task.cancel()
+        app.loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
         if app.bot_token:
             app.loop.run_until_complete(stop_download_bot())
         app.loop.run_until_complete(stop_server(client))
-        for task in tasks:
-            task.cancel()
+        signal.signal(signal.SIGTERM, previous_sigterm)
         logger.info(_t("Stopped!"))
         # check_for_updates(app.proxy)
         logger.info(f"{_t('update config')}......")
-        app.update_config()
+        if not app.monitor_config.enabled:
+            app.update_config()
         logger.success(
             f"{_t('Updated last read message_id to config file')},"
             f"{_t('total download')} {app.total_download_task}, "
@@ -701,5 +789,8 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default=CONFIG_NAME, help="Path to config.yaml")
+    app.config_file = parser.parse_args().config
     if _check_config():
         main()

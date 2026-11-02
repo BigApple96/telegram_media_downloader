@@ -23,6 +23,17 @@
 </h3>
 
 ## Overview
+
+### This fork: automatic video downloads configured in config.yaml
+
+Configure `video_monitor.chats` with a `chat_id` and inclusive `start_message_id`.
+The downloader writes `last_read_message_id` back to config.yaml after processing,
+then resumes after that position on restart. Mount the configuration directory
+as shown in the Compose example to allow atomic progress updates.
+No forwarding group, bot command, or external scheduler is required.
+See the [Synology deployment guide (Chinese)](docs/automatic-video-downloads.md) and
+[Compose example](compose.monitor.yaml).
+
 > Support two default running
 
 * The robot is running, and the command `download` or `forward` is issued from the robot

@@ -653,7 +653,9 @@ async def process_caption(
     return truncated_caption
 
 
-def convert_message_entity(client, entity: "pyrogram.raw.base.MessageEntity") -> Optional["pyrogram.types.MessageEntity"]:
+def convert_message_entity(
+    client, entity: "pyrogram.raw.base.MessageEntity"
+) -> Optional["pyrogram.types.MessageEntity"]:
     # Special case for InputMessageEntityMentionName -> MessageEntityType.TEXT_MENTION
     # This happens in case of UpdateShortSentMessage inside send_message() where entities are parsed from the input
     if isinstance(entity, pyrogram.raw.types.InputMessageEntityMentionName):
@@ -672,8 +674,9 @@ def convert_message_entity(client, entity: "pyrogram.raw.base.MessageEntity") ->
         language=getattr(entity, "language", None),
         custom_emoji_id=getattr(entity, "document_id", None),
         expandable=getattr(entity, "collapsed", None),
-        client=client
+        client=client,
     )
+
 
 def convert_entities(
     entities: List[pyrogram.raw.base.MessageEntity],
@@ -683,9 +686,7 @@ def convert_entities(
         return []
 
     try:
-        return [
-            convert_message_entity(None, entity) for entity in entities
-        ]
+        return [convert_message_entity(None, entity) for entity in entities]
     except Exception as e:
         logger.warning(f"Failed to convert entities: {e}")
         return []
@@ -996,7 +997,15 @@ def record_download_status(func):
 
         _download_cache[(node.chat_id, message.id)] = DownloadStatus.Downloading
 
-        status, file_name = await func(client, message, media_types, file_formats, node)
+        try:
+            status, file_name = await func(
+                client, message, media_types, file_formats, node
+            )
+        except BaseException:
+            # A fetch error or cancelled worker must not leave this message
+            # permanently marked Downloading, preventing monitor retries.
+            _download_cache[(node.chat_id, message.id)] = DownloadStatus.FailedDownload
+            raise
 
         _download_cache[(node.chat_id, message.id)] = status
 

@@ -1,0 +1,36 @@
+# Copy to config.yaml and fill these locally. Never commit your real credentials.
+api_id: 123456
+api_hash: "replace_with_your_api_hash"
+# Optional: monitoring uses the logged-in user account and does not require a bot.
+bot_token: ""
+chat: []
+video_monitor:
+  enabled: true
+  interval: 60
+  chats:
+    - chat_id: -1004342657661
+      # Inclusive: skip messages through 129 and begin with 130.
+      start_message_id: 130
+      # last_read_message_id is added/updated automatically after processing.
+media_types:
+  - video
+  - document
+file_formats:
+  audio:
+    - all
+  video:
+    - all
+  document:
+    - all
+save_path: /app/downloads
+file_path_prefix:
+  - media_type
+file_name_prefix:
+  - message_id
+  - file_name
+max_download_task: 2
+web_host: 0.0.0.0
+web_port: 5000
+language: ZH
+allowed_user_ids:
+  - me

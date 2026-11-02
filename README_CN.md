@@ -24,6 +24,13 @@
 
 ## 概述
 
+### 本 fork：config.yaml 自动监听视频下载
+
+在 `video_monitor.chats` 配置频道及 `start_message_id`（包含该条），程序自动下载视频，
+并逐条回写 `last_read_message_id` 到 config.yaml，重启从进度之后继续。
+请按示例挂载配置目录，以便安全保存进度；不需要中转群、监听命令或额外计划任务。
+详见 [群晖部署说明](docs/automatic-video-downloads.md) 和 [Compose 示例](compose.monitor.yaml)。
+
 > 支持两种默认运行
 
 * 机器人运行，从机器人下发命令`下载`或者`转发`

@@ -57,6 +57,7 @@ async def get_chat_history_v2(
     offset_id: int = 0,
     offset_date: datetime = utils.zero_datetime(),
     reverse: bool = False,
+    allow_fallback: bool = True,
 ) -> Optional[AsyncGenerator["types.Message", None]]:
     """Get messages from a chat history."""
     current = 0
@@ -76,6 +77,8 @@ async def get_chat_history_v2(
         )
 
         if not messages:
+            if not allow_fallback:
+                return
             break_count = offset_id - 1
             async for message in self.get_chat_history(chat_id):
                 if break_count:

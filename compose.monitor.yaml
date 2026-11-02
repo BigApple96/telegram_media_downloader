@@ -1,0 +1,19 @@
+services:
+  telegram_media_downloader:
+    image: ${TDL_IMAGE:-ghcr.io/bigapple96/telegram_media_downloader:latest}
+    # For a local checkout: docker compose -f compose.monitor.yaml build
+    build: .
+    command: ["python", "media_downloader.py", "--config", "/app/settings/config.yaml"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - "5000:5000"
+    volumes:
+      # Put config.yaml in ./settings. Mount the folder so progress can be
+      # written using atomic replacement; do not mount config.yaml alone.
+      - ./settings:/app/settings
+      - ./data.yaml:/app/data.yaml
+      - ./sessions:/app/sessions
+      - ./downloads:/app/downloads
+      - ./temp:/app/temp
+      - ./log:/app/log
